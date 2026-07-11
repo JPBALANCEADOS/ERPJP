@@ -7,40 +7,105 @@
 <style>
   html, body { margin:0; padding:0; height:100%; overflow:hidden; }
   iframe { width:100%; height:100vh; border:none; display:block; }
+
+  #btn-cambiar-empresa {
+    position:fixed; top:8px; right:8px; z-index:999;
+    background:rgba(17,24,39,0.75); color:#fff; border:none; border-radius:20px;
+    padding:6px 14px; font-family:system-ui,sans-serif; font-size:11px; cursor:pointer;
+    display:none; align-items:center; gap:6px; backdrop-filter:blur(4px);
+  }
+  #btn-cambiar-empresa:hover { background:rgba(17,24,39,0.9); }
 </style>
 </head>
 <body>
 
 <!--
-  Este iframe arranca mostrando el LOGIN DE EMPRESA (CUIT + contraseña)
-  del proyecto central. Reemplazá la URL de abajo por el /exec real de
-  tu proyecto MANAGER (el que sirve CENTRAL_doGet.gs).
+  Este iframe muestra, según el caso:
+    - El LOGIN DE EMPRESA (CUIT + contraseña) del proyecto central, la
+      primera vez que alguien entra desde ese navegador.
+    - Directamente el sistema del cliente, si ya quedó "recordado" en
+      este navegador de una vez anterior (ver localStorage más abajo).
 -->
 <iframe
   id="iframe-principal"
-  src="https://script.google.com/macros/s/AKfycbyDDyVLAvh3HbG9S4Ot_txcKS3Uj2qhdxxiITePNICvKH8HcsfgTxwUi-8iZUM3ltDqpw/exec"
+  src=""
   title="JPBalanceados ERP"
 ></iframe>
 
-<script>
-  // ─────────────────────────────────────────────────────────────────────
-  // Escucha el aviso del login de empresa (que corre ADENTRO del iframe,
-  // bajo el origen de Apps Script) y actualiza el src de este mismo
-  // iframe con la URL real del proyecto del cliente — sin recargar esta
-  // página y SIN que cambie la URL en la barra de direcciones del
-  // navegador. El usuario nunca deja de estar, visualmente, en
-  // jpbalanceados.com.
-  // ─────────────────────────────────────────────────────────────────────
+<button id="btn-cambiar-empresa" onclick="cambiarEmpresa()">
+  <span id="txt-empresa-actual"></span> · Cambiar de empresa
+</button>
 
+<script>
+  // URL del LOGIN DE EMPRESA del proyecto central — la puerta de entrada
+  // pública. Reemplazar por el /exec real de tu proyecto MANAGER.
+  var URL_LOGIN_EMPRESA = 'https://script.google.com/macros/s/TU_URL_DEL_PROYECTO_CENTRAL/exec';
+
+  var CLAVE_LOCALSTORAGE = 'jpb_empresa_recordada';
+
+  // ── Al cargar la página: ¿ya hay una empresa recordada en este navegador? ──
+  // localStorage sobrevive a recargas, cierres de pestaña, y reinicios del
+  // navegador — pero es exclusivo de ESTE dispositivo/navegador (nunca se
+  // manda a ningún servidor). Guardamos solo la URL y el nombre — NUNCA
+  // contraseñas ni tokens de sesión acá.
+  // ── Al cargar la página: ¿ya hay una empresa recordada, y sigue siendo HOY? ──
+  // localStorage sobrevive a recargas, cierres de pestaña, y reinicios del
+  // navegador — pero es exclusivo de ESTE dispositivo/navegador (nunca se
+  // manda a ningún servidor). Guardamos la URL, el nombre, Y la fecha
+  // (calendario, no "24hs exactas") en que se guardó — si cambió el día,
+  // se descarta y vuelve a pedir CUIT+contraseña, aunque hayan pasado
+  // pocos minutos desde medianoche.
+  function iniciar() {
+    var guardado = leerEmpresaRecordada();
+    if (guardado && guardado.url && guardado.fecha === fechaDeHoy()) {
+      document.getElementById('iframe-principal').src = guardado.url;
+      mostrarBotonCambiar(guardado.nombre);
+    } else {
+      try { localStorage.removeItem(CLAVE_LOCALSTORAGE); } catch (e) {} // vencido o inexistente — se limpia
+      document.getElementById('iframe-principal').src = URL_LOGIN_EMPRESA;
+    }
+  }
+
+  function fechaDeHoy() {
+    // Fecha LOCAL del dispositivo, no UTC — "el día" es el día de quien
+    // está usando el navegador, no el de un servidor en otro huso horario.
+    var d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  function leerEmpresaRecordada() {
+    try {
+      var raw = localStorage.getItem(CLAVE_LOCALSTORAGE);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null; // localStorage puede fallar en algunos navegadores/modos — no rompemos por eso.
+    }
+  }
+
+  function guardarEmpresaRecordada(url, nombre) {
+    try {
+      localStorage.setItem(CLAVE_LOCALSTORAGE, JSON.stringify({ url: url, nombre: nombre || '', fecha: fechaDeHoy() }));
+    } catch (e) { /* si falla, no pasa nada grave — simplemente no se recuerda la próxima vez */ }
+  }
+
+  function mostrarBotonCambiar(nombre) {
+    var btn = document.getElementById('btn-cambiar-empresa');
+    document.getElementById('txt-empresa-actual').textContent = nombre || 'Conectado';
+    btn.style.display = 'flex';
+  }
+
+  function cambiarEmpresa() {
+    try { localStorage.removeItem(CLAVE_LOCALSTORAGE); } catch (e) {}
+    document.getElementById('btn-cambiar-empresa').style.display = 'none';
+    document.getElementById('iframe-principal').src = URL_LOGIN_EMPRESA;
+  }
+
+  // ── Escucha el aviso del login de empresa ──────────────────────────────
+  // El login de empresa corre ADENTRO del iframe, bajo el origen de Apps
+  // Script — nos avisa vía postMessage cuál es la URL real del cliente
+  // (ver comentario largo en la versión anterior de este archivo sobre
+  // por qué se usa postMessage y por qué el chequeo de origen es así).
   window.addEventListener('message', function(event) {
-    // ── Seguridad: origen del mensaje ──────────────────────────────────
-    // Apps Script sirve el contenido HTML de un /exec desde un origen
-    // interno de sandbox (algo como https://n-XXXXXXXX.googleusercontent.com),
-    // no siempre exactamente "https://script.google.com". Por eso
-    // aceptamos cualquier subdominio de googleusercontent.com además del
-    // dominio directo — y como defensa adicional, más abajo validamos
-    // también que la URL recibida sea realmente de script.google.com
-    // antes de usarla.
     var origenValido =
       event.origin === 'https://script.google.com' ||
       /\.googleusercontent\.com$/.test(new URL(event.origin).hostname);
@@ -49,15 +114,16 @@
     if (!event.data || event.data.tipo !== 'ENTRAR_A_EMPRESA') return;
 
     var url = String(event.data.url || '');
-
-    // ── Defensa en profundidad: solo aceptamos URLs de Apps Script ─────
-    // Aunque el mensaje ya pasó el chequeo de origen, no confiamos en el
-    // contenido a ciegas — si por lo que sea la URL no es un /exec real
-    // de Apps Script, la ignoramos.
     if (url.indexOf('https://script.google.com/macros/s/') !== 0) return;
 
+    var nombre = String(event.data.nombre || '');
+
     document.getElementById('iframe-principal').src = url;
+    guardarEmpresaRecordada(url, nombre);
+    mostrarBotonCambiar(nombre);
   });
+
+  iniciar();
 </script>
 </body>
 </html>
